@@ -1,0 +1,200 @@
+name: Build VRates
+
+on:
+  push:
+    branches: [ main, master ]
+    tags: [ 'v*' ]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  MOD_VERSION: '1.0.0'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup .NET 6
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '6.0.x'
+
+      - name: Restore
+        run: dotnet restore src/VRates/VRates.csproj --configfile nuget.config
+
+      - name: Build
+        run: dotnet build src/VRates/VRates.csproj -c Release --no-restore
+
+      - name: Validate release source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          source = Path("src/VRates/Plugin.cs").read_text(encoding="utf-8")
+
+          version = re.search(r'public const string PluginVersion = "([^"]+)";', source)
+          if not version:
+              raise SystemExit("PluginVersion was not found in Plugin.cs")
+
+          if version.group(1) != os.environ["MOD_VERSION"]:
+              raise SystemExit(
+                  f"PluginVersion {version.group(1)} does not match "
+                  f"MOD_VERSION {os.environ['MOD_VERSION']}"
+              )
+
+          required_targets = [
+              "MaterialYieldModifier_Global",
+              "DropTableModifier_General",
+          ]
+          for target in required_targets:
+              if target not in source:
+                  raise SystemExit(f"Required VRates target is missing: {target}")
+
+          forbidden_targets = [
+              "DropTableModifier_Missions",
+              "DropTableModifier_StygianShards",
+              "BloodEssenceYieldModifier",
+              "InventoryStacksModifier",
+          ]
+          for target in forbidden_targets:
+              if target in source:
+                  raise SystemExit(
+                      f"Unexpected unrelated server setting in v1.0.0 source: {target}"
+                  )
+          PY
+
+      - name: Prepare Thunderstore package
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          PKG="$GITHUB_WORKSPACE/dist/VRates"
+          ZIP="$GITHUB_WORKSPACE/dist/VRates_Thunderstore_v${MOD_VERSION}.zip"
+          REPO_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}"
+
+          rm -rf "$PKG" "$ZIP"
+          mkdir -p "$PKG/BepInEx/plugins/VRates" "$PKG/Source"
+
+          cp src/VRates/bin/Release/net6.0/VRates.dll \
+             "$PKG/BepInEx/plugins/VRates/VRates.dll"
+
+          cp src/VRates/Plugin.cs "$PKG/Source/Plugin.cs"
+          cp src/VRates/VRates.csproj "$PKG/Source/VRates.csproj"
+          printf '%s\n' "$GITHUB_SHA" > "$PKG/Source/BUILD_COMMIT.txt"
+
+          cp README.md CHANGELOG.md SOURCE_REVIEW.md "$PKG/"
+          cp thunderstore/icon.png "$PKG/icon.png"
+
+          sed \
+            -e "s|__REPOSITORY_URL__|${REPO_URL}|g" \
+            -e "s|__VERSION__|${MOD_VERSION}|g" \
+            thunderstore/manifest.template.json > "$PKG/manifest.json"
+
+          cd "$PKG"
+          zip -rq "$ZIP" .
+
+      - name: Validate Thunderstore package
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          PKG="$GITHUB_WORKSPACE/dist/VRates"
+          ZIP="$GITHUB_WORKSPACE/dist/VRates_Thunderstore_v${MOD_VERSION}.zip"
+
+          required_files=(
+            "manifest.json"
+            "README.md"
+            "CHANGELOG.md"
+            "SOURCE_REVIEW.md"
+            "icon.png"
+            "BepInEx/plugins/VRates/VRates.dll"
+            "Source/Plugin.cs"
+            "Source/VRates.csproj"
+            "Source/BUILD_COMMIT.txt"
+          )
+
+          for rel in "${required_files[@]}"; do
+            if [[ ! -s "$PKG/$rel" ]]; then
+              echo "Missing or empty required package file: $rel" >&2
+              exit 1
+            fi
+          done
+
+          cmp -s src/VRates/Plugin.cs "$PKG/Source/Plugin.cs"
+          cmp -s src/VRates/VRates.csproj "$PKG/Source/VRates.csproj"
+
+          if [[ "$(tr -d '\r\n' < "$PKG/Source/BUILD_COMMIT.txt")" != "$GITHUB_SHA" ]]; then
+            echo "BUILD_COMMIT.txt does not match GITHUB_SHA." >&2
+            exit 1
+          fi
+
+          python3 -m json.tool "$PKG/manifest.json" >/dev/null
+
+          python3 - "$PKG/icon.png" <<'PY'
+          import struct
+          import sys
+
+          path = sys.argv[1]
+          with open(path, "rb") as f:
+              if f.read(8) != b"\x89PNG\r\n\x1a\n":
+                  raise SystemExit("icon.png is not a valid PNG")
+
+              length = struct.unpack(">I", f.read(4))[0]
+              chunk_type = f.read(4)
+              if chunk_type != b"IHDR" or length < 8:
+                  raise SystemExit("icon.png has no valid IHDR chunk")
+
+              width, height = struct.unpack(">II", f.read(8))
+              if (width, height) != (256, 256):
+                  raise SystemExit(
+                      f"icon.png must be 256x256, got {width}x{height}"
+                  )
+          PY
+
+          if find "$PKG" -type f \( \
+              -iname 'VRates.Native.dll' -o \
+              -iname 'version.dll' -o \
+              -iname '*MinHook*' \
+            \) -print -quit | grep -q .; then
+            echo "Forbidden native helper/proxy detected in package." >&2
+            exit 1
+          fi
+
+          extra_dll="$(
+            find "$PKG" -type f -iname '*.dll' \
+              ! -path "$PKG/BepInEx/plugins/VRates/VRates.dll" \
+              -print -quit
+          )"
+
+          if [[ -n "$extra_dll" ]]; then
+            echo "Unexpected DLL detected in package: $extra_dll" >&2
+            exit 1
+          fi
+
+          unzip -tqq "$ZIP"
+          echo "Thunderstore package validation passed."
+
+      - name: Upload DLL artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: VRates-dll
+          path: src/VRates/bin/Release/net6.0/VRates.dll
+          if-no-files-found: error
+
+      - name: Upload Thunderstore package artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: VRates-Thunderstore-v1.0.0
+          path: dist/VRates_Thunderstore_v1.0.0.zip
+          if-no-files-found: error
