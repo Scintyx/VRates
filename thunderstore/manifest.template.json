@@ -1,0 +1,9 @@
+{
+  "name": "VRates",
+  "version_number": "__VERSION__",
+  "website_url": "__REPOSITORY_URL__",
+  "description": "Configurable harvest and general loot multipliers beyond V Rising's vanilla x3 limit. Defaults to x10.",
+  "dependencies": [
+    "BepInEx-BepInExPack_V_Rising-1.733.2"
+  ]
+}
