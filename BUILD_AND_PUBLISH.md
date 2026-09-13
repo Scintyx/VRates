@@ -57,3 +57,13 @@ The source files in the package are byte-for-byte copies of the files used by CI
 5. Upload that ZIP to Thunderstore.
 
 Do not rebuild the DLL manually after CI if the package is intended for release; use the CI artifact so `BUILD_COMMIT.txt` accurately identifies the build source.
+
+## v1.0.0 scope
+
+VRates v1.0.0 includes five configurable rates, all defaulting to x10:
+
+- Harvest
+- General Loot
+- Mission Loot
+- Stygian Shards
+- Blood Essence

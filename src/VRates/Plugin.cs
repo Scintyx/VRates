@@ -1,8 +1,8 @@
 using System;
 using System.Diagnostics;
 using System.IO;
-using System.Runtime.InteropServices;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using BepInEx;
 using BepInEx.Configuration;
 using BepInEx.Unity.IL2CPP;
@@ -20,6 +20,10 @@ public sealed class Plugin : BasePlugin
 
     public const float DefaultHarvestMultiplier = 10.0f;
     public const float DefaultLootMultiplier = 10.0f;
+    public const float DefaultMissionLootMultiplier = 10.0f;
+    public const float DefaultStygianShardMultiplier = 10.0f;
+    public const float DefaultBloodEssenceMultiplier = 10.0f;
+
     public const float MinimumMultiplier = 0.01f;
 
     // SettingsClamp::Half stores these values as IEEE 754 binary16/half.
@@ -28,6 +32,9 @@ public sealed class Plugin : BasePlugin
 
     private const string HarvestSettingName = "MaterialYieldModifier_Global";
     private const string LootSettingName = "DropTableModifier_General";
+    private const string MissionLootSettingName = "DropTableModifier_Missions";
+    private const string StygianShardSettingName = "DropTableModifier_StygianShards";
+    private const string BloodEssenceSettingName = "BloodEssenceYieldModifier";
 
     private const uint ImageScnMemExecute = 0x20000000;
 
@@ -48,8 +55,12 @@ public sealed class Plugin : BasePlugin
     };
 
     private ConfigFile? _vRatesConfig;
+
     private ConfigEntry<float>? _harvestMultiplier;
     private ConfigEntry<float>? _lootMultiplier;
+    private ConfigEntry<float>? _missionLootMultiplier;
+    private ConfigEntry<float>? _stygianShardMultiplier;
+    private ConfigEntry<float>? _bloodEssenceMultiplier;
 
     private INativeDetour? _detour;
     private SettingsClampHalfDelegate? _original;
@@ -57,46 +68,62 @@ public sealed class Plugin : BasePlugin
 
     private bool _loggedHarvestIntercept;
     private bool _loggedLootIntercept;
+    private bool _loggedMissionLootIntercept;
+    private bool _loggedStygianShardIntercept;
+    private bool _loggedBloodEssenceIntercept;
+
     private bool _loggedInvalidHarvest;
     private bool _loggedInvalidLoot;
+    private bool _loggedInvalidMissionLoot;
+    private bool _loggedInvalidStygianShard;
+    private bool _loggedInvalidBloodEssence;
 
     private bool _usingVStackBroker;
     private MethodInfo? _vStackUnregisterMethod;
+
     private Func<float>? _harvestProviderDelegate;
     private Func<float>? _lootProviderDelegate;
+    private Func<float>? _missionLootProviderDelegate;
+    private Func<float>? _stygianShardProviderDelegate;
+    private Func<float>? _bloodEssenceProviderDelegate;
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate ushort SettingsClampHalfDelegate(float value, float min, float max, IntPtr fieldName);
 
     public override void Load()
     {
-        // Keep configuration in one predictable server-side file:
-        // BepInEx/config/VRates.cfg
         _vRatesConfig = new ConfigFile(Path.Combine(Paths.ConfigPath, "VRates.cfg"), true);
 
-        _harvestMultiplier = _vRatesConfig.Bind(
-            "Rates",
+        _harvestMultiplier = BindRate(
             "HarvestMultiplier",
             DefaultHarvestMultiplier,
-            "Multiplier for MaterialYieldModifier_Global (resource-node harvesting). " +
-            "Default: 10. Examples: 5, 10, 20, 50, 100. " +
-            "Valid positive range: 0.01 to 65504. Restart the server/host after editing.");
+            "Multiplier for MaterialYieldModifier_Global (resource-node harvesting).");
 
-        _lootMultiplier = _vRatesConfig.Bind(
-            "Rates",
+        _lootMultiplier = BindRate(
             "LootMultiplier",
             DefaultLootMultiplier,
-            "Multiplier for DropTableModifier_General (general loot from kills/chests/drop tables). " +
-            "Default: 10. Examples: 5, 10, 20, 50, 100. " +
-            "Valid positive range: 0.01 to 65504. Restart the server/host after editing.");
+            "Multiplier for DropTableModifier_General (general loot from kills/chests/drop tables).");
+
+        _missionLootMultiplier = BindRate(
+            "MissionLootMultiplier",
+            DefaultMissionLootMultiplier,
+            "Multiplier for DropTableModifier_Missions (servant mission rewards).");
+
+        _stygianShardMultiplier = BindRate(
+            "StygianShardMultiplier",
+            DefaultStygianShardMultiplier,
+            "Multiplier for DropTableModifier_StygianShards (Stygian Shard drops).");
+
+        _bloodEssenceMultiplier = BindRate(
+            "BloodEssenceMultiplier",
+            DefaultBloodEssenceMultiplier,
+            "Multiplier for BloodEssenceYieldModifier (Blood Essence yield).");
 
         bool vStackDetected;
         if (TryRegisterWithVStack(out vStackDetected))
         {
             Log.LogInfo($"{PluginName} {PluginVersion} loaded using the VStacks shared SettingsClamp hook.");
-            Log.LogInfo(
-                $"Harvest: {HarvestSettingName} -> x{GetHarvestMultiplier():0.###}; " +
-                $"Loot: {LootSettingName} -> x{GetLootMultiplier():0.###}.");
+            LogConfiguredRates();
             Log.LogInfo($"Config file: {_vRatesConfig.ConfigFilePath}");
             return;
         }
@@ -110,7 +137,7 @@ public sealed class Plugin : BasePlugin
         }
 
         // Standalone mode: when VStacks is not installed, VRates owns the native
-        // SettingsClamp::Half detour exactly as before.
+        // SettingsClamp::Half detour.
         try
         {
             IntPtr target = FindSettingsClampHalf();
@@ -134,12 +161,11 @@ public sealed class Plugin : BasePlugin
 
             Log.LogInfo($"{PluginName} {PluginVersion} loaded (managed-only BepInEx hook).");
             Log.LogInfo($"Hooked SettingsClamp::Half at 0x{target.ToInt64():X}.");
-            Log.LogInfo(
-                $"Harvest: {HarvestSettingName} -> x{GetHarvestMultiplier():0.###}; " +
-                $"Loot: {LootSettingName} -> x{GetLootMultiplier():0.###}.");
+            LogConfiguredRates();
             Log.LogInfo($"Config file: {_vRatesConfig.ConfigFilePath}");
             Log.LogInfo(
-                "Only MaterialYieldModifier_Global and DropTableModifier_General are modified. " +
+                "VRates modifies only MaterialYieldModifier_Global, DropTableModifier_General, " +
+                "DropTableModifier_Missions, DropTableModifier_StygianShards, and BloodEssenceYieldModifier. " +
                 "All other V Rising settings pass through unchanged.");
         }
         catch (Exception ex)
@@ -153,9 +179,7 @@ public sealed class Plugin : BasePlugin
         try
         {
             if (_usingVStackBroker && _vStackUnregisterMethod is not null)
-            {
                 _vStackUnregisterMethod.Invoke(null, new object[] { PluginGuid });
-            }
         }
         catch (Exception ex)
         {
@@ -166,8 +190,12 @@ public sealed class Plugin : BasePlugin
         {
             _usingVStackBroker = false;
             _vStackUnregisterMethod = null;
+
             _harvestProviderDelegate = null;
             _lootProviderDelegate = null;
+            _missionLootProviderDelegate = null;
+            _stygianShardProviderDelegate = null;
+            _bloodEssenceProviderDelegate = null;
 
             _detour?.Dispose();
             _detour = null;
@@ -176,6 +204,9 @@ public sealed class Plugin : BasePlugin
 
             _harvestMultiplier = null;
             _lootMultiplier = null;
+            _missionLootMultiplier = null;
+            _stygianShardMultiplier = null;
+            _bloodEssenceMultiplier = null;
             _vRatesConfig = null;
         }
         catch (Exception ex)
@@ -184,6 +215,30 @@ public sealed class Plugin : BasePlugin
         }
 
         return true;
+    }
+
+    private ConfigEntry<float> BindRate(string key, float defaultValue, string description)
+    {
+        if (_vRatesConfig is null)
+            throw new InvalidOperationException("VRates config is not initialized.");
+
+        return _vRatesConfig.Bind(
+            "Rates",
+            key,
+            defaultValue,
+            description + " " +
+            "Default: 10. Examples: 5, 10, 20, 50, 100. " +
+            "Valid positive range: 0.01 to 65504. Restart the server/host after editing.");
+    }
+
+    private void LogConfiguredRates()
+    {
+        Log.LogInfo(
+            $"Harvest x{GetHarvestMultiplier():0.###}; " +
+            $"General Loot x{GetLootMultiplier():0.###}; " +
+            $"Mission Loot x{GetMissionLootMultiplier():0.###}; " +
+            $"Stygian Shards x{GetStygianShardMultiplier():0.###}; " +
+            $"Blood Essence x{GetBloodEssenceMultiplier():0.###}.");
     }
 
     private bool TryRegisterWithVStack(out bool vStackDetected)
@@ -224,33 +279,20 @@ public sealed class Plugin : BasePlugin
 
         _harvestProviderDelegate = GetHarvestMultiplier;
         _lootProviderDelegate = GetLootMultiplier;
-
-        bool harvestRegistered = false;
-        bool lootRegistered = false;
+        _missionLootProviderDelegate = GetMissionLootMultiplier;
+        _stygianShardProviderDelegate = GetStygianShardMultiplier;
+        _bloodEssenceProviderDelegate = GetBloodEssenceMultiplier;
 
         try
         {
-            harvestRegistered = Convert.ToBoolean(
-                registerMethod.Invoke(
-                    null,
-                    new object[]
-                    {
-                        PluginGuid,
-                        HarvestSettingName,
-                        _harvestProviderDelegate
-                    }));
+            bool allRegistered =
+                RegisterWithBroker(registerMethod, HarvestSettingName, _harvestProviderDelegate) &&
+                RegisterWithBroker(registerMethod, LootSettingName, _lootProviderDelegate) &&
+                RegisterWithBroker(registerMethod, MissionLootSettingName, _missionLootProviderDelegate) &&
+                RegisterWithBroker(registerMethod, StygianShardSettingName, _stygianShardProviderDelegate) &&
+                RegisterWithBroker(registerMethod, BloodEssenceSettingName, _bloodEssenceProviderDelegate);
 
-            lootRegistered = Convert.ToBoolean(
-                registerMethod.Invoke(
-                    null,
-                    new object[]
-                    {
-                        PluginGuid,
-                        LootSettingName,
-                        _lootProviderDelegate
-                    }));
-
-            if (!harvestRegistered || !lootRegistered)
+            if (!allRegistered)
             {
                 unregisterMethod.Invoke(null, new object[] { PluginGuid });
                 return false;
@@ -260,7 +302,7 @@ public sealed class Plugin : BasePlugin
             _usingVStackBroker = true;
 
             Log.LogInfo(
-                "VStacks compatibility detected. Registered VRates settings with the shared " +
+                "VStacks compatibility detected. Registered all five VRates settings with the shared " +
                 "SettingsClamp::Half hook; VRates will not install a second native detour.");
 
             return true;
@@ -278,10 +320,31 @@ public sealed class Plugin : BasePlugin
 
             _usingVStackBroker = false;
             _vStackUnregisterMethod = null;
+
             _harvestProviderDelegate = null;
             _lootProviderDelegate = null;
+            _missionLootProviderDelegate = null;
+            _stygianShardProviderDelegate = null;
+            _bloodEssenceProviderDelegate = null;
+
             throw;
         }
+    }
+
+    private static bool RegisterWithBroker(
+        MethodInfo registerMethod,
+        string settingName,
+        Func<float> provider)
+    {
+        return Convert.ToBoolean(
+            registerMethod.Invoke(
+                null,
+                new object[]
+                {
+                    PluginGuid,
+                    settingName,
+                    provider
+                }));
     }
 
     private ushort SettingsClampHalfDetour(float value, float min, float max, IntPtr fieldName)
@@ -293,11 +356,7 @@ public sealed class Plugin : BasePlugin
         if (IsIl2CppStringEqual(fieldName, HarvestSettingName))
         {
             float multiplier = GetHarvestMultiplier();
-
-            // Replace only MaterialYieldModifier_Global.
-            value = multiplier;
-            min = 0.0f;
-            max = multiplier;
+            ApplyMultiplier(ref value, ref min, ref max, multiplier);
 
             if (!_loggedHarvestIntercept)
             {
@@ -308,11 +367,7 @@ public sealed class Plugin : BasePlugin
         else if (IsIl2CppStringEqual(fieldName, LootSettingName))
         {
             float multiplier = GetLootMultiplier();
-
-            // Replace only DropTableModifier_General.
-            value = multiplier;
-            min = 0.0f;
-            max = multiplier;
+            ApplyMultiplier(ref value, ref min, ref max, multiplier);
 
             if (!_loggedLootIntercept)
             {
@@ -320,9 +375,49 @@ public sealed class Plugin : BasePlugin
                 Log.LogInfo($"{LootSettingName} intercepted and forced to x{multiplier:0.###}.");
             }
         }
+        else if (IsIl2CppStringEqual(fieldName, MissionLootSettingName))
+        {
+            float multiplier = GetMissionLootMultiplier();
+            ApplyMultiplier(ref value, ref min, ref max, multiplier);
+
+            if (!_loggedMissionLootIntercept)
+            {
+                _loggedMissionLootIntercept = true;
+                Log.LogInfo($"{MissionLootSettingName} intercepted and forced to x{multiplier:0.###}.");
+            }
+        }
+        else if (IsIl2CppStringEqual(fieldName, StygianShardSettingName))
+        {
+            float multiplier = GetStygianShardMultiplier();
+            ApplyMultiplier(ref value, ref min, ref max, multiplier);
+
+            if (!_loggedStygianShardIntercept)
+            {
+                _loggedStygianShardIntercept = true;
+                Log.LogInfo($"{StygianShardSettingName} intercepted and forced to x{multiplier:0.###}.");
+            }
+        }
+        else if (IsIl2CppStringEqual(fieldName, BloodEssenceSettingName))
+        {
+            float multiplier = GetBloodEssenceMultiplier();
+            ApplyMultiplier(ref value, ref min, ref max, multiplier);
+
+            if (!_loggedBloodEssenceIntercept)
+            {
+                _loggedBloodEssenceIntercept = true;
+                Log.LogInfo($"{BloodEssenceSettingName} intercepted and forced to x{multiplier:0.###}.");
+            }
+        }
 
         // Every unrelated setting is passed to the original function unchanged.
         return original(value, min, max, fieldName);
+    }
+
+    private static void ApplyMultiplier(ref float value, ref float min, ref float max, float multiplier)
+    {
+        value = multiplier;
+        min = 0.0f;
+        max = multiplier;
     }
 
     private float GetHarvestMultiplier()
@@ -341,6 +436,33 @@ public sealed class Plugin : BasePlugin
             DefaultLootMultiplier,
             "LootMultiplier",
             ref _loggedInvalidLoot);
+    }
+
+    private float GetMissionLootMultiplier()
+    {
+        return GetValidatedMultiplier(
+            _missionLootMultiplier?.Value ?? DefaultMissionLootMultiplier,
+            DefaultMissionLootMultiplier,
+            "MissionLootMultiplier",
+            ref _loggedInvalidMissionLoot);
+    }
+
+    private float GetStygianShardMultiplier()
+    {
+        return GetValidatedMultiplier(
+            _stygianShardMultiplier?.Value ?? DefaultStygianShardMultiplier,
+            DefaultStygianShardMultiplier,
+            "StygianShardMultiplier",
+            ref _loggedInvalidStygianShard);
+    }
+
+    private float GetBloodEssenceMultiplier()
+    {
+        return GetValidatedMultiplier(
+            _bloodEssenceMultiplier?.Value ?? DefaultBloodEssenceMultiplier,
+            DefaultBloodEssenceMultiplier,
+            "BloodEssenceMultiplier",
+            ref _loggedInvalidBloodEssence);
     }
 
     private float GetValidatedMultiplier(
