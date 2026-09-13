@@ -56,16 +56,18 @@ jobs:
           required_targets = [
               "MaterialYieldModifier_Global",
               "DropTableModifier_General",
+              "DropTableModifier_Missions",
+              "DropTableModifier_StygianShards",
+              "BloodEssenceYieldModifier",
           ]
           for target in required_targets:
               if target not in source:
                   raise SystemExit(f"Required VRates target is missing: {target}")
 
           forbidden_targets = [
-              "DropTableModifier_Missions",
-              "DropTableModifier_StygianShards",
-              "BloodEssenceYieldModifier",
               "InventoryStacksModifier",
+              "CraftRateModifier",
+              "RefinementRateModifier",
           ]
           for target in forbidden_targets:
               if target in source:
