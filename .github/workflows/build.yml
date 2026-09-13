@@ -59,6 +59,11 @@ jobs:
               "DropTableModifier_Missions",
               "DropTableModifier_StygianShards",
               "BloodEssenceYieldModifier",
+              "CraftRateModifier",
+              "RefinementRateModifier",
+              "RecipeCostModifier",
+              "RefinementCostModifier",
+              "BuildCostModifier",
           ]
           for target in required_targets:
               if target not in source:
@@ -66,8 +71,6 @@ jobs:
 
           forbidden_targets = [
               "InventoryStacksModifier",
-              "CraftRateModifier",
-              "RefinementRateModifier",
           ]
           for target in forbidden_targets:
               if target in source:
