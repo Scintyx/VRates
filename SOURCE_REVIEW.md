@@ -58,3 +58,11 @@ Source/BUILD_COMMIT.txt
 ```
 
 `BUILD_COMMIT.txt` contains the Git commit hash used by GitHub Actions to build the packaged DLL.
+
+## VStacks compatibility
+
+VRates declares `com.originera.vstack` as a BepInEx soft dependency. When VStacks 1.0.1+ is present, VRates
+registers its two exact setting names through VStacks' public cooperative settings-hook API and does not install
+its own native detour. When VStacks is absent, VRates uses its standalone `INativeDetour` path.
+
+This prevents two plugins from rewriting the same `SettingsClamp::Half` function entry.

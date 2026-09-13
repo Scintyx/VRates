@@ -2,6 +2,7 @@ using System;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Reflection;
 using BepInEx;
 using BepInEx.Configuration;
 using BepInEx.Unity.IL2CPP;
@@ -10,6 +11,7 @@ using BepInEx.Unity.IL2CPP.Hook;
 namespace VRates;
 
 [BepInPlugin(PluginGuid, PluginName, PluginVersion)]
+[BepInDependency("com.originera.vstack", BepInDependency.DependencyFlags.SoftDependency)]
 public sealed class Plugin : BasePlugin
 {
     public const string PluginGuid = "com.originera.vrates";
@@ -58,6 +60,11 @@ public sealed class Plugin : BasePlugin
     private bool _loggedInvalidHarvest;
     private bool _loggedInvalidLoot;
 
+    private bool _usingVStackBroker;
+    private MethodInfo? _vStackUnregisterMethod;
+    private Func<float>? _harvestProviderDelegate;
+    private Func<float>? _lootProviderDelegate;
+
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate ushort SettingsClampHalfDelegate(float value, float min, float max, IntPtr fieldName);
 
@@ -83,6 +90,27 @@ public sealed class Plugin : BasePlugin
             "Default: 10. Examples: 5, 10, 20, 50, 100. " +
             "Valid positive range: 0.01 to 65504. Restart the server/host after editing.");
 
+        bool vStackDetected;
+        if (TryRegisterWithVStack(out vStackDetected))
+        {
+            Log.LogInfo($"{PluginName} {PluginVersion} loaded using the VStacks shared SettingsClamp hook.");
+            Log.LogInfo(
+                $"Harvest: {HarvestSettingName} -> x{GetHarvestMultiplier():0.###}; " +
+                $"Loot: {LootSettingName} -> x{GetLootMultiplier():0.###}.");
+            Log.LogInfo($"Config file: {_vRatesConfig.ConfigFilePath}");
+            return;
+        }
+
+        if (vStackDetected)
+        {
+            Log.LogError(
+                "VStacks was detected, but it does not expose the shared SettingsClamp compatibility API. " +
+                "Update VStacks to version 1.0.1 or newer. VRates will not install a second competing native hook.");
+            return;
+        }
+
+        // Standalone mode: when VStacks is not installed, VRates owns the native
+        // SettingsClamp::Half detour exactly as before.
         try
         {
             IntPtr target = FindSettingsClampHalf();
@@ -124,6 +152,23 @@ public sealed class Plugin : BasePlugin
     {
         try
         {
+            if (_usingVStackBroker && _vStackUnregisterMethod is not null)
+            {
+                _vStackUnregisterMethod.Invoke(null, new object[] { PluginGuid });
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.LogWarning($"Error while unregistering from the VStacks settings broker: {ex}");
+        }
+
+        try
+        {
+            _usingVStackBroker = false;
+            _vStackUnregisterMethod = null;
+            _harvestProviderDelegate = null;
+            _lootProviderDelegate = null;
+
             _detour?.Dispose();
             _detour = null;
             _original = null;
@@ -139,6 +184,104 @@ public sealed class Plugin : BasePlugin
         }
 
         return true;
+    }
+
+    private bool TryRegisterWithVStack(out bool vStackDetected)
+    {
+        vStackDetected = false;
+        Type? vStackPluginType = null;
+
+        foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
+        {
+            Type? candidate = assembly.GetType("VStack.Plugin", throwOnError: false, ignoreCase: false);
+            if (candidate is null)
+                continue;
+
+            vStackPluginType = candidate;
+            vStackDetected = true;
+            break;
+        }
+
+        if (vStackPluginType is null)
+            return false;
+
+        MethodInfo? registerMethod = vStackPluginType.GetMethod(
+            "RegisterSettingOverride",
+            BindingFlags.Public | BindingFlags.Static,
+            binder: null,
+            types: new[] { typeof(string), typeof(string), typeof(Func<float>) },
+            modifiers: null);
+
+        MethodInfo? unregisterMethod = vStackPluginType.GetMethod(
+            "UnregisterSettingOverrides",
+            BindingFlags.Public | BindingFlags.Static,
+            binder: null,
+            types: new[] { typeof(string) },
+            modifiers: null);
+
+        if (registerMethod is null || unregisterMethod is null)
+            return false;
+
+        _harvestProviderDelegate = GetHarvestMultiplier;
+        _lootProviderDelegate = GetLootMultiplier;
+
+        bool harvestRegistered = false;
+        bool lootRegistered = false;
+
+        try
+        {
+            harvestRegistered = Convert.ToBoolean(
+                registerMethod.Invoke(
+                    null,
+                    new object[]
+                    {
+                        PluginGuid,
+                        HarvestSettingName,
+                        _harvestProviderDelegate
+                    }));
+
+            lootRegistered = Convert.ToBoolean(
+                registerMethod.Invoke(
+                    null,
+                    new object[]
+                    {
+                        PluginGuid,
+                        LootSettingName,
+                        _lootProviderDelegate
+                    }));
+
+            if (!harvestRegistered || !lootRegistered)
+            {
+                unregisterMethod.Invoke(null, new object[] { PluginGuid });
+                return false;
+            }
+
+            _vStackUnregisterMethod = unregisterMethod;
+            _usingVStackBroker = true;
+
+            Log.LogInfo(
+                "VStacks compatibility detected. Registered VRates settings with the shared " +
+                "SettingsClamp::Half hook; VRates will not install a second native detour.");
+
+            return true;
+        }
+        catch
+        {
+            try
+            {
+                unregisterMethod.Invoke(null, new object[] { PluginGuid });
+            }
+            catch
+            {
+                // Best-effort rollback only.
+            }
+
+            _usingVStackBroker = false;
+            _vStackUnregisterMethod = null;
+            _harvestProviderDelegate = null;
+            _lootProviderDelegate = null;
+            throw;
+        }
     }
 
     private ushort SettingsClampHalfDetour(float value, float min, float max, IntPtr fieldName)

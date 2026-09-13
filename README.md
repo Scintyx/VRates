@@ -144,3 +144,16 @@ src/VRates/bin/Release/net6.0/VRates.dll
 The Thunderstore package contains the exact `Plugin.cs` and `VRates.csproj` used by CI, plus `Source/BUILD_COMMIT.txt` containing the Git commit that produced the DLL.
 
 See `SOURCE_REVIEW.md` for the runtime-hook scope.
+
+## Compatibility with VStacks
+
+VRates can run by itself or together with **VStacks 1.0.1+**.
+
+When VStacks is installed, VRates declares it as a BepInEx soft dependency so VStacks loads first. VRates then
+registers its two setting overrides with VStacks' shared `SettingsClamp::Half` hook and **does not install a
+second native detour**.
+
+When VStacks is not installed, VRates runs in standalone mode and installs its own `SettingsClamp::Half` hook.
+
+If VStacks 1.0.0 is detected, VRates intentionally refuses to install a competing hook and asks for VStacks
+1.0.1+ instead.
