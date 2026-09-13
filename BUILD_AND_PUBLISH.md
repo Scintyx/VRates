@@ -60,10 +60,18 @@ Do not rebuild the DLL manually after CI if the package is intended for release;
 
 ## v1.0.0 scope
 
-VRates v1.0.0 includes five configurable rates, all defaulting to x10:
+VRates v1.0.0 includes 10 configurable settings.
 
+Default x10:
 - Harvest
 - General Loot
 - Mission Loot
 - Stygian Shards
 - Blood Essence
+- Craft Speed
+- Refinement Speed
+
+Default x1:
+- Recipe Cost
+- Refinement Cost
+- Build Cost

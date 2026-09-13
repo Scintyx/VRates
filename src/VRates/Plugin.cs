@@ -23,6 +23,13 @@ public sealed class Plugin : BasePlugin
     public const float DefaultMissionLootMultiplier = 10.0f;
     public const float DefaultStygianShardMultiplier = 10.0f;
     public const float DefaultBloodEssenceMultiplier = 10.0f;
+    public const float DefaultCraftSpeedMultiplier = 10.0f;
+    public const float DefaultRefinementSpeedMultiplier = 10.0f;
+
+    // Cost multipliers intentionally default to vanilla x1.
+    public const float DefaultRecipeCostMultiplier = 1.0f;
+    public const float DefaultRefinementCostMultiplier = 1.0f;
+    public const float DefaultBuildCostMultiplier = 1.0f;
 
     public const float MinimumMultiplier = 0.01f;
 
@@ -35,6 +42,11 @@ public sealed class Plugin : BasePlugin
     private const string MissionLootSettingName = "DropTableModifier_Missions";
     private const string StygianShardSettingName = "DropTableModifier_StygianShards";
     private const string BloodEssenceSettingName = "BloodEssenceYieldModifier";
+    private const string CraftRateSettingName = "CraftRateModifier";
+    private const string RefinementRateSettingName = "RefinementRateModifier";
+    private const string RecipeCostSettingName = "RecipeCostModifier";
+    private const string RefinementCostSettingName = "RefinementCostModifier";
+    private const string BuildCostSettingName = "BuildCostModifier";
 
     private const uint ImageScnMemExecute = 0x20000000;
 
@@ -61,6 +73,11 @@ public sealed class Plugin : BasePlugin
     private ConfigEntry<float>? _missionLootMultiplier;
     private ConfigEntry<float>? _stygianShardMultiplier;
     private ConfigEntry<float>? _bloodEssenceMultiplier;
+    private ConfigEntry<float>? _craftSpeedMultiplier;
+    private ConfigEntry<float>? _refinementSpeedMultiplier;
+    private ConfigEntry<float>? _recipeCostMultiplier;
+    private ConfigEntry<float>? _refinementCostMultiplier;
+    private ConfigEntry<float>? _buildCostMultiplier;
 
     private INativeDetour? _detour;
     private SettingsClampHalfDelegate? _original;
@@ -71,12 +88,22 @@ public sealed class Plugin : BasePlugin
     private bool _loggedMissionLootIntercept;
     private bool _loggedStygianShardIntercept;
     private bool _loggedBloodEssenceIntercept;
+    private bool _loggedCraftSpeedIntercept;
+    private bool _loggedRefinementSpeedIntercept;
+    private bool _loggedRecipeCostIntercept;
+    private bool _loggedRefinementCostIntercept;
+    private bool _loggedBuildCostIntercept;
 
     private bool _loggedInvalidHarvest;
     private bool _loggedInvalidLoot;
     private bool _loggedInvalidMissionLoot;
     private bool _loggedInvalidStygianShard;
     private bool _loggedInvalidBloodEssence;
+    private bool _loggedInvalidCraftSpeed;
+    private bool _loggedInvalidRefinementSpeed;
+    private bool _loggedInvalidRecipeCost;
+    private bool _loggedInvalidRefinementCost;
+    private bool _loggedInvalidBuildCost;
 
     private bool _usingVStackBroker;
     private MethodInfo? _vStackUnregisterMethod;
@@ -86,6 +113,11 @@ public sealed class Plugin : BasePlugin
     private Func<float>? _missionLootProviderDelegate;
     private Func<float>? _stygianShardProviderDelegate;
     private Func<float>? _bloodEssenceProviderDelegate;
+    private Func<float>? _craftSpeedProviderDelegate;
+    private Func<float>? _refinementSpeedProviderDelegate;
+    private Func<float>? _recipeCostProviderDelegate;
+    private Func<float>? _refinementCostProviderDelegate;
+    private Func<float>? _buildCostProviderDelegate;
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate ushort SettingsClampHalfDelegate(float value, float min, float max, IntPtr fieldName);
@@ -118,6 +150,31 @@ public sealed class Plugin : BasePlugin
             "BloodEssenceMultiplier",
             DefaultBloodEssenceMultiplier,
             "Multiplier for BloodEssenceYieldModifier (Blood Essence yield).");
+
+        _craftSpeedMultiplier = BindRate(
+            "CraftSpeedMultiplier",
+            DefaultCraftSpeedMultiplier,
+            "Multiplier for CraftRateModifier (crafting speed).");
+
+        _refinementSpeedMultiplier = BindRate(
+            "RefinementSpeedMultiplier",
+            DefaultRefinementSpeedMultiplier,
+            "Multiplier for RefinementRateModifier (refinement/processing speed).");
+
+        _recipeCostMultiplier = BindRate(
+            "RecipeCostMultiplier",
+            DefaultRecipeCostMultiplier,
+            "Multiplier for RecipeCostModifier (crafting recipe material cost). x1 is vanilla.");
+
+        _refinementCostMultiplier = BindRate(
+            "RefinementCostMultiplier",
+            DefaultRefinementCostMultiplier,
+            "Multiplier for RefinementCostModifier (refinement material cost). x1 is vanilla.");
+
+        _buildCostMultiplier = BindRate(
+            "BuildCostMultiplier",
+            DefaultBuildCostMultiplier,
+            "Multiplier for BuildCostModifier (building material cost). x1 is vanilla.");
 
         bool vStackDetected;
         if (TryRegisterWithVStack(out vStackDetected))
@@ -164,8 +221,7 @@ public sealed class Plugin : BasePlugin
             LogConfiguredRates();
             Log.LogInfo($"Config file: {_vRatesConfig.ConfigFilePath}");
             Log.LogInfo(
-                "VRates modifies only MaterialYieldModifier_Global, DropTableModifier_General, " +
-                "DropTableModifier_Missions, DropTableModifier_StygianShards, and BloodEssenceYieldModifier. " +
+                "VRates modifies only its ten explicitly supported rate/cost settings. " +
                 "All other V Rising settings pass through unchanged.");
         }
         catch (Exception ex)
@@ -196,6 +252,11 @@ public sealed class Plugin : BasePlugin
             _missionLootProviderDelegate = null;
             _stygianShardProviderDelegate = null;
             _bloodEssenceProviderDelegate = null;
+            _craftSpeedProviderDelegate = null;
+            _refinementSpeedProviderDelegate = null;
+            _recipeCostProviderDelegate = null;
+            _refinementCostProviderDelegate = null;
+            _buildCostProviderDelegate = null;
 
             _detour?.Dispose();
             _detour = null;
@@ -207,6 +268,11 @@ public sealed class Plugin : BasePlugin
             _missionLootMultiplier = null;
             _stygianShardMultiplier = null;
             _bloodEssenceMultiplier = null;
+            _craftSpeedMultiplier = null;
+            _refinementSpeedMultiplier = null;
+            _recipeCostMultiplier = null;
+            _refinementCostMultiplier = null;
+            _buildCostMultiplier = null;
             _vRatesConfig = null;
         }
         catch (Exception ex)
@@ -227,7 +293,7 @@ public sealed class Plugin : BasePlugin
             key,
             defaultValue,
             description + " " +
-            "Default: 10. Examples: 5, 10, 20, 50, 100. " +
+            $"Default: {defaultValue:0.###}. " +
             "Valid positive range: 0.01 to 65504. Restart the server/host after editing.");
     }
 
@@ -238,7 +304,12 @@ public sealed class Plugin : BasePlugin
             $"General Loot x{GetLootMultiplier():0.###}; " +
             $"Mission Loot x{GetMissionLootMultiplier():0.###}; " +
             $"Stygian Shards x{GetStygianShardMultiplier():0.###}; " +
-            $"Blood Essence x{GetBloodEssenceMultiplier():0.###}.");
+            $"Blood Essence x{GetBloodEssenceMultiplier():0.###}; " +
+            $"Craft Speed x{GetCraftSpeedMultiplier():0.###}; " +
+            $"Refinement Speed x{GetRefinementSpeedMultiplier():0.###}; " +
+            $"Recipe Cost x{GetRecipeCostMultiplier():0.###}; " +
+            $"Refinement Cost x{GetRefinementCostMultiplier():0.###}; " +
+            $"Build Cost x{GetBuildCostMultiplier():0.###}.");
     }
 
     private bool TryRegisterWithVStack(out bool vStackDetected)
@@ -282,6 +353,11 @@ public sealed class Plugin : BasePlugin
         _missionLootProviderDelegate = GetMissionLootMultiplier;
         _stygianShardProviderDelegate = GetStygianShardMultiplier;
         _bloodEssenceProviderDelegate = GetBloodEssenceMultiplier;
+        _craftSpeedProviderDelegate = GetCraftSpeedMultiplier;
+        _refinementSpeedProviderDelegate = GetRefinementSpeedMultiplier;
+        _recipeCostProviderDelegate = GetRecipeCostMultiplier;
+        _refinementCostProviderDelegate = GetRefinementCostMultiplier;
+        _buildCostProviderDelegate = GetBuildCostMultiplier;
 
         try
         {
@@ -290,7 +366,12 @@ public sealed class Plugin : BasePlugin
                 RegisterWithBroker(registerMethod, LootSettingName, _lootProviderDelegate) &&
                 RegisterWithBroker(registerMethod, MissionLootSettingName, _missionLootProviderDelegate) &&
                 RegisterWithBroker(registerMethod, StygianShardSettingName, _stygianShardProviderDelegate) &&
-                RegisterWithBroker(registerMethod, BloodEssenceSettingName, _bloodEssenceProviderDelegate);
+                RegisterWithBroker(registerMethod, BloodEssenceSettingName, _bloodEssenceProviderDelegate) &&
+                RegisterWithBroker(registerMethod, CraftRateSettingName, _craftSpeedProviderDelegate) &&
+                RegisterWithBroker(registerMethod, RefinementRateSettingName, _refinementSpeedProviderDelegate) &&
+                RegisterWithBroker(registerMethod, RecipeCostSettingName, _recipeCostProviderDelegate) &&
+                RegisterWithBroker(registerMethod, RefinementCostSettingName, _refinementCostProviderDelegate) &&
+                RegisterWithBroker(registerMethod, BuildCostSettingName, _buildCostProviderDelegate);
 
             if (!allRegistered)
             {
@@ -302,7 +383,7 @@ public sealed class Plugin : BasePlugin
             _usingVStackBroker = true;
 
             Log.LogInfo(
-                "VStacks compatibility detected. Registered all five VRates settings with the shared " +
+                "VStacks compatibility detected. Registered all ten VRates settings with the shared " +
                 "SettingsClamp::Half hook; VRates will not install a second native detour.");
 
             return true;
@@ -326,6 +407,11 @@ public sealed class Plugin : BasePlugin
             _missionLootProviderDelegate = null;
             _stygianShardProviderDelegate = null;
             _bloodEssenceProviderDelegate = null;
+            _craftSpeedProviderDelegate = null;
+            _refinementSpeedProviderDelegate = null;
+            _recipeCostProviderDelegate = null;
+            _refinementCostProviderDelegate = null;
+            _buildCostProviderDelegate = null;
 
             throw;
         }
@@ -354,116 +440,78 @@ public sealed class Plugin : BasePlugin
             return 0;
 
         if (IsIl2CppStringEqual(fieldName, HarvestSettingName))
-        {
-            float multiplier = GetHarvestMultiplier();
-            ApplyMultiplier(ref value, ref min, ref max, multiplier);
-
-            if (!_loggedHarvestIntercept)
-            {
-                _loggedHarvestIntercept = true;
-                Log.LogInfo($"{HarvestSettingName} intercepted and forced to x{multiplier:0.###}.");
-            }
-        }
+            ApplySetting(ref value, ref min, ref max, GetHarvestMultiplier(), HarvestSettingName, ref _loggedHarvestIntercept);
         else if (IsIl2CppStringEqual(fieldName, LootSettingName))
-        {
-            float multiplier = GetLootMultiplier();
-            ApplyMultiplier(ref value, ref min, ref max, multiplier);
-
-            if (!_loggedLootIntercept)
-            {
-                _loggedLootIntercept = true;
-                Log.LogInfo($"{LootSettingName} intercepted and forced to x{multiplier:0.###}.");
-            }
-        }
+            ApplySetting(ref value, ref min, ref max, GetLootMultiplier(), LootSettingName, ref _loggedLootIntercept);
         else if (IsIl2CppStringEqual(fieldName, MissionLootSettingName))
-        {
-            float multiplier = GetMissionLootMultiplier();
-            ApplyMultiplier(ref value, ref min, ref max, multiplier);
-
-            if (!_loggedMissionLootIntercept)
-            {
-                _loggedMissionLootIntercept = true;
-                Log.LogInfo($"{MissionLootSettingName} intercepted and forced to x{multiplier:0.###}.");
-            }
-        }
+            ApplySetting(ref value, ref min, ref max, GetMissionLootMultiplier(), MissionLootSettingName, ref _loggedMissionLootIntercept);
         else if (IsIl2CppStringEqual(fieldName, StygianShardSettingName))
-        {
-            float multiplier = GetStygianShardMultiplier();
-            ApplyMultiplier(ref value, ref min, ref max, multiplier);
-
-            if (!_loggedStygianShardIntercept)
-            {
-                _loggedStygianShardIntercept = true;
-                Log.LogInfo($"{StygianShardSettingName} intercepted and forced to x{multiplier:0.###}.");
-            }
-        }
+            ApplySetting(ref value, ref min, ref max, GetStygianShardMultiplier(), StygianShardSettingName, ref _loggedStygianShardIntercept);
         else if (IsIl2CppStringEqual(fieldName, BloodEssenceSettingName))
-        {
-            float multiplier = GetBloodEssenceMultiplier();
-            ApplyMultiplier(ref value, ref min, ref max, multiplier);
-
-            if (!_loggedBloodEssenceIntercept)
-            {
-                _loggedBloodEssenceIntercept = true;
-                Log.LogInfo($"{BloodEssenceSettingName} intercepted and forced to x{multiplier:0.###}.");
-            }
-        }
+            ApplySetting(ref value, ref min, ref max, GetBloodEssenceMultiplier(), BloodEssenceSettingName, ref _loggedBloodEssenceIntercept);
+        else if (IsIl2CppStringEqual(fieldName, CraftRateSettingName))
+            ApplySetting(ref value, ref min, ref max, GetCraftSpeedMultiplier(), CraftRateSettingName, ref _loggedCraftSpeedIntercept);
+        else if (IsIl2CppStringEqual(fieldName, RefinementRateSettingName))
+            ApplySetting(ref value, ref min, ref max, GetRefinementSpeedMultiplier(), RefinementRateSettingName, ref _loggedRefinementSpeedIntercept);
+        else if (IsIl2CppStringEqual(fieldName, RecipeCostSettingName))
+            ApplySetting(ref value, ref min, ref max, GetRecipeCostMultiplier(), RecipeCostSettingName, ref _loggedRecipeCostIntercept);
+        else if (IsIl2CppStringEqual(fieldName, RefinementCostSettingName))
+            ApplySetting(ref value, ref min, ref max, GetRefinementCostMultiplier(), RefinementCostSettingName, ref _loggedRefinementCostIntercept);
+        else if (IsIl2CppStringEqual(fieldName, BuildCostSettingName))
+            ApplySetting(ref value, ref min, ref max, GetBuildCostMultiplier(), BuildCostSettingName, ref _loggedBuildCostIntercept);
 
         // Every unrelated setting is passed to the original function unchanged.
         return original(value, min, max, fieldName);
     }
 
-    private static void ApplyMultiplier(ref float value, ref float min, ref float max, float multiplier)
+    private void ApplySetting(
+        ref float value,
+        ref float min,
+        ref float max,
+        float multiplier,
+        string settingName,
+        ref bool logged)
     {
         value = multiplier;
         min = 0.0f;
         max = multiplier;
+
+        if (!logged)
+        {
+            logged = true;
+            Log.LogInfo($"{settingName} intercepted and forced to x{multiplier:0.###}.");
+        }
     }
 
-    private float GetHarvestMultiplier()
-    {
-        return GetValidatedMultiplier(
-            _harvestMultiplier?.Value ?? DefaultHarvestMultiplier,
-            DefaultHarvestMultiplier,
-            "HarvestMultiplier",
-            ref _loggedInvalidHarvest);
-    }
+    private float GetHarvestMultiplier() =>
+        GetValidatedMultiplier(_harvestMultiplier?.Value ?? DefaultHarvestMultiplier, DefaultHarvestMultiplier, "HarvestMultiplier", ref _loggedInvalidHarvest);
 
-    private float GetLootMultiplier()
-    {
-        return GetValidatedMultiplier(
-            _lootMultiplier?.Value ?? DefaultLootMultiplier,
-            DefaultLootMultiplier,
-            "LootMultiplier",
-            ref _loggedInvalidLoot);
-    }
+    private float GetLootMultiplier() =>
+        GetValidatedMultiplier(_lootMultiplier?.Value ?? DefaultLootMultiplier, DefaultLootMultiplier, "LootMultiplier", ref _loggedInvalidLoot);
 
-    private float GetMissionLootMultiplier()
-    {
-        return GetValidatedMultiplier(
-            _missionLootMultiplier?.Value ?? DefaultMissionLootMultiplier,
-            DefaultMissionLootMultiplier,
-            "MissionLootMultiplier",
-            ref _loggedInvalidMissionLoot);
-    }
+    private float GetMissionLootMultiplier() =>
+        GetValidatedMultiplier(_missionLootMultiplier?.Value ?? DefaultMissionLootMultiplier, DefaultMissionLootMultiplier, "MissionLootMultiplier", ref _loggedInvalidMissionLoot);
 
-    private float GetStygianShardMultiplier()
-    {
-        return GetValidatedMultiplier(
-            _stygianShardMultiplier?.Value ?? DefaultStygianShardMultiplier,
-            DefaultStygianShardMultiplier,
-            "StygianShardMultiplier",
-            ref _loggedInvalidStygianShard);
-    }
+    private float GetStygianShardMultiplier() =>
+        GetValidatedMultiplier(_stygianShardMultiplier?.Value ?? DefaultStygianShardMultiplier, DefaultStygianShardMultiplier, "StygianShardMultiplier", ref _loggedInvalidStygianShard);
 
-    private float GetBloodEssenceMultiplier()
-    {
-        return GetValidatedMultiplier(
-            _bloodEssenceMultiplier?.Value ?? DefaultBloodEssenceMultiplier,
-            DefaultBloodEssenceMultiplier,
-            "BloodEssenceMultiplier",
-            ref _loggedInvalidBloodEssence);
-    }
+    private float GetBloodEssenceMultiplier() =>
+        GetValidatedMultiplier(_bloodEssenceMultiplier?.Value ?? DefaultBloodEssenceMultiplier, DefaultBloodEssenceMultiplier, "BloodEssenceMultiplier", ref _loggedInvalidBloodEssence);
+
+    private float GetCraftSpeedMultiplier() =>
+        GetValidatedMultiplier(_craftSpeedMultiplier?.Value ?? DefaultCraftSpeedMultiplier, DefaultCraftSpeedMultiplier, "CraftSpeedMultiplier", ref _loggedInvalidCraftSpeed);
+
+    private float GetRefinementSpeedMultiplier() =>
+        GetValidatedMultiplier(_refinementSpeedMultiplier?.Value ?? DefaultRefinementSpeedMultiplier, DefaultRefinementSpeedMultiplier, "RefinementSpeedMultiplier", ref _loggedInvalidRefinementSpeed);
+
+    private float GetRecipeCostMultiplier() =>
+        GetValidatedMultiplier(_recipeCostMultiplier?.Value ?? DefaultRecipeCostMultiplier, DefaultRecipeCostMultiplier, "RecipeCostMultiplier", ref _loggedInvalidRecipeCost);
+
+    private float GetRefinementCostMultiplier() =>
+        GetValidatedMultiplier(_refinementCostMultiplier?.Value ?? DefaultRefinementCostMultiplier, DefaultRefinementCostMultiplier, "RefinementCostMultiplier", ref _loggedInvalidRefinementCost);
+
+    private float GetBuildCostMultiplier() =>
+        GetValidatedMultiplier(_buildCostMultiplier?.Value ?? DefaultBuildCostMultiplier, DefaultBuildCostMultiplier, "BuildCostMultiplier", ref _loggedInvalidBuildCost);
 
     private float GetValidatedMultiplier(
         float configured,
@@ -504,10 +552,6 @@ public sealed class Plugin : BasePlugin
         if (stringObject == IntPtr.Zero)
             return false;
 
-        // 64-bit IL2CPP string layout:
-        // 0x00 object header (16 bytes)
-        // 0x10 int32 length
-        // 0x14 UTF-16 character data
         byte* raw = (byte*)stringObject;
         int length = *(int*)(raw + 0x10);
 
@@ -543,13 +587,13 @@ public sealed class Plugin : BasePlugin
 
         byte* imageBase = (byte*)gameAssembly.BaseAddress;
 
-        if (*(ushort*)imageBase != 0x5A4D) // MZ
+        if (*(ushort*)imageBase != 0x5A4D)
             throw new InvalidOperationException("Loaded GameAssembly.dll has an invalid DOS header.");
 
         int peOffset = *(int*)(imageBase + 0x3C);
         byte* ntHeaders = imageBase + peOffset;
 
-        if (*(uint*)ntHeaders != 0x00004550) // PE\0\0
+        if (*(uint*)ntHeaders != 0x00004550)
             throw new InvalidOperationException("Loaded GameAssembly.dll has an invalid PE header.");
 
         ushort numberOfSections = *(ushort*)(ntHeaders + 0x06);

@@ -2,7 +2,7 @@
   "name": "VRates",
   "version_number": "__VERSION__",
   "website_url": "__REPOSITORY_URL__",
-  "description": "Configurable harvest, general loot, mission loot, Stygian Shard, and Blood Essence multipliers beyond V Rising's vanilla x3 limit. Defaults to x10.",
+  "description": "Configurable V Rising harvest, loot, mission, shard, blood essence, crafting, refinement, recipe cost, refinement cost, and build cost multipliers. Rates default x10; costs default x1.",
   "dependencies": [
     "BepInEx-BepInExPack_V_Rising-1.733.2"
   ]

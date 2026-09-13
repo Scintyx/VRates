@@ -1,10 +1,10 @@
 # Source Review
 
-VRates is intentionally small and managed-only so its runtime behavior is easy to inspect.
+VRates is intentionally managed-only and limits its runtime changes to explicitly named V Rising server settings.
 
 ## Supported settings
 
-VRates v1.0.0 modifies exactly five V Rising settings:
+VRates v1.0.0 modifies exactly these 10 setting names:
 
 ```text
 MaterialYieldModifier_Global
@@ -12,56 +12,54 @@ DropTableModifier_General
 DropTableModifier_Missions
 DropTableModifier_StygianShards
 BloodEssenceYieldModifier
+CraftRateModifier
+RefinementRateModifier
+RecipeCostModifier
+RefinementCostModifier
+BuildCostModifier
 ```
 
-It does not modify inventory stack size, crafting rates, refinement rates, or unrelated server settings.
+`InventoryStacksModifier` is not modified by VRates.
 
-## Standalone runtime modification
+## Defaults
 
-When VStacks is not installed:
+Rate/speed settings default to x10.
 
-1. VRates pattern-scans the executable sections of the loaded `GameAssembly.dll` for the current `SettingsClamp::Half` signature.
-2. The signature must be found exactly once; otherwise the hook is not installed.
-3. BepInEx `INativeDetour.CreateAndApply` installs the hook from managed C#.
-4. The detour compares the IL2CPP field name against the five exact supported names.
-5. Only a matching supported setting receives its configured VRates multiplier.
-6. Every unrelated setting passes through unchanged.
+Cost settings default to x1:
+
+```text
+RecipeCostModifier
+RefinementCostModifier
+BuildCostModifier
+```
+
+## Standalone hook
+
+When VStacks is absent:
+
+1. VRates scans executable sections of the loaded `GameAssembly.dll`.
+2. `SettingsClamp::Half` must match exactly once.
+3. BepInEx `INativeDetour.CreateAndApply` installs one managed detour.
+4. The incoming IL2CPP field name is compared against the 10 exact supported names.
+5. Only an exact match is overridden.
+6. All unrelated settings pass to the original function unchanged.
 
 ## VStacks compatibility
 
 VRates declares `com.originera.vstack` as a BepInEx soft dependency.
 
-When VStacks 1.0.1+ is present, VRates registers all five exact setting names through VStacks' public cooperative settings-hook API and does not install its own native detour.
+With VStacks 1.0.1+, VRates registers the 10 exact setting names with VStacks' cooperative settings-hook API and does not install another native detour.
 
-This prevents two plugins from rewriting the same `SettingsClamp::Half` function entry.
+This avoids two mods rewriting the same native function entry.
 
-If an older VStacks build is detected without the compatibility API, VRates fails safely instead of installing a competing hook.
+## No native payload
 
-## No bundled native payload
-
-The package does not contain:
+The package contains no:
 
 ```text
 VRates.Native.dll
 MinHook
 version.dll
-```
-
-## Configuration
-
-```text
-BepInEx/config/VRates.cfg
-```
-
-Default values:
-
-```ini
-[Rates]
-HarvestMultiplier = 10
-LootMultiplier = 10
-MissionLootMultiplier = 10
-StygianShardMultiplier = 10
-BloodEssenceMultiplier = 10
 ```
 
 ## Build provenance
@@ -73,5 +71,3 @@ Source/Plugin.cs
 Source/VRates.csproj
 Source/BUILD_COMMIT.txt
 ```
-
-`BUILD_COMMIT.txt` contains the Git commit hash used by GitHub Actions to build the packaged DLL.

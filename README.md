@@ -1,8 +1,10 @@
 # VRates
 
-**VRates** is a managed-only BepInEx 6 IL2CPP mod for **V Rising** that removes the normal x3 limit from five common server rate settings.
+**VRates** is a managed-only BepInEx 6 IL2CPP mod for **V Rising** that extends common server rates and costs beyond the normal game-setting limits.
 
-All five rates default to **x10** and are independently configurable.
+VRates v1.0.0 exposes **10 independently configurable settings**.
+
+Rate/speed defaults are **x10**. Cost defaults remain **x1 (vanilla)**.
 
 ## Configuration
 
@@ -21,35 +23,52 @@ LootMultiplier = 10
 MissionLootMultiplier = 10
 StygianShardMultiplier = 10
 BloodEssenceMultiplier = 10
+CraftSpeedMultiplier = 10
+RefinementSpeedMultiplier = 10
+
+RecipeCostMultiplier = 1
+RefinementCostMultiplier = 1
+BuildCostMultiplier = 1
 ```
 
 Restart the server/host after changing the file.
 
-Practical values such as x5, x10, x20, x50, or x100 are recommended.
+## Setting map
 
-## Rate mapping
+| Config option | V Rising setting | Default | Purpose |
+|---|---|---:|---|
+| `HarvestMultiplier` | `MaterialYieldModifier_Global` | x10 | Resource-node harvesting yield |
+| `LootMultiplier` | `DropTableModifier_General` | x10 | General loot |
+| `MissionLootMultiplier` | `DropTableModifier_Missions` | x10 | Servant mission rewards |
+| `StygianShardMultiplier` | `DropTableModifier_StygianShards` | x10 | Stygian Shard drops |
+| `BloodEssenceMultiplier` | `BloodEssenceYieldModifier` | x10 | Blood Essence yield |
+| `CraftSpeedMultiplier` | `CraftRateModifier` | x10 | Crafting speed |
+| `RefinementSpeedMultiplier` | `RefinementRateModifier` | x10 | Refinement/processing speed |
+| `RecipeCostMultiplier` | `RecipeCostModifier` | x1 | Crafting recipe material cost |
+| `RefinementCostMultiplier` | `RefinementCostModifier` | x1 | Refinement material cost |
+| `BuildCostMultiplier` | `BuildCostModifier` | x1 | Building material cost |
 
-| Config option | V Rising setting | Purpose |
-|---|---|---|
-| `HarvestMultiplier` | `MaterialYieldModifier_Global` | Resource-node harvesting yield |
-| `LootMultiplier` | `DropTableModifier_General` | General loot from kills/chests/drop tables |
-| `MissionLootMultiplier` | `DropTableModifier_Missions` | Servant mission rewards |
-| `StygianShardMultiplier` | `DropTableModifier_StygianShards` | Stygian Shard drops |
-| `BloodEssenceMultiplier` | `BloodEssenceYieldModifier` | Blood Essence yield |
+### Cost multiplier examples
 
-VRates accepts positive values up to `65504`, the largest finite value representable by the half-precision setting type used by this V Rising settings path.
+For the three cost settings:
+
+```text
+1.0 = normal vanilla cost
+0.5 = approximately half material cost
+2.0 = approximately double material cost
+```
+
+The mod accepts positive values from `0.01` up to `65504`.
 
 ## Intentionally not modified
 
-VRates v1.0.0 does **not** modify:
+VRates does not modify:
 
 ```text
 InventoryStacksModifier
-CraftRateModifier
-RefinementRateModifier
 ```
 
-VStacks continues to own inventory stack size separately.
+Inventory stack size remains the responsibility of VStacks.
 
 ## Compatibility with VStacks
 
@@ -57,14 +76,14 @@ VRates works by itself or together with **VStacks 1.0.1+**.
 
 When VStacks is installed:
 
-1. BepInEx loads VStacks first because VRates declares VStacks as a soft dependency.
+1. BepInEx loads VStacks first because VRates declares it as a soft dependency.
 2. VStacks owns the single native `SettingsClamp::Half` detour.
-3. VRates registers its five exact setting names with VStacks.
+3. VRates registers all 10 exact supported setting names with VStacks.
 4. VRates does **not** install a second native detour.
 
-When VStacks is not installed, VRates runs in standalone mode and installs its own `SettingsClamp::Half` hook.
+When VStacks is absent, VRates installs its own standalone `SettingsClamp::Half` hook.
 
-If VStacks 1.0.0 is detected, VRates intentionally refuses to install a competing hook and asks for VStacks 1.0.1+.
+If VStacks 1.0.0 is detected, VRates refuses to install a competing native hook and asks for VStacks 1.0.1+.
 
 ## Installation
 
@@ -72,53 +91,41 @@ VRates is intended to be **server-side**.
 
 ### Dedicated server
 
-1. Install BepInExPack V Rising `1.733.2`.
-2. Copy:
-
-```text
-VRates.dll
-```
-
-to:
+Install:
 
 ```text
 BepInEx/plugins/VRates/VRates.dll
 ```
 
-3. Start the server once.
-4. Edit:
+Start the server once, then edit:
 
 ```text
 BepInEx/config/VRates.cfg
 ```
 
-5. Restart the server.
+Restart after changes.
 
-Connecting players do not need VRates installed.
+Clients do not need VRates installed.
 
 ### Host & Play
 
-Install VRates into the BepInEx environment used by the host game.
+Install VRates into the host's BepInEx environment.
 
-## How it works
+## Implementation
 
-V Rising validates these server multipliers through `SettingsClamp::Half`, where the normal server settings range is capped at x3.
-
-When standalone, VRates:
+When running standalone, VRates:
 
 1. locates the current `SettingsClamp::Half` implementation in `GameAssembly.dll` using a fail-closed executable signature;
-2. installs a managed BepInEx `INativeDetour`;
-3. checks the IL2CPP setting name;
-4. substitutes the configured multiplier only for the five supported rate settings;
-5. passes every unrelated setting to the original game function unchanged.
+2. installs one managed BepInEx `INativeDetour`;
+3. compares the IL2CPP field name against the 10 supported setting names;
+4. substitutes the configured value only for an exact match;
+5. passes every unrelated setting through unchanged.
 
-When VStacks 1.0.1+ is installed, VRates registers the same five exact names through VStacks' cooperative hook API instead.
+When VStacks 1.0.1+ is present, VRates registers those exact names through VStacks' cooperative hook API instead.
 
-VRates ships no custom native DLL, MinHook, or proxy DLL.
+VRates contains no custom native DLL, MinHook, or proxy DLL.
 
 ## Build
-
-Requires the .NET 6 SDK.
 
 ```bash
 dotnet restore src/VRates/VRates.csproj --configfile nuget.config
@@ -130,9 +137,3 @@ Output:
 ```text
 src/VRates/bin/Release/net6.0/VRates.dll
 ```
-
-## Source review
-
-The Thunderstore package contains the exact `Plugin.cs` and `VRates.csproj` used by CI plus `Source/BUILD_COMMIT.txt`.
-
-See `SOURCE_REVIEW.md` for the exact hook scope.
